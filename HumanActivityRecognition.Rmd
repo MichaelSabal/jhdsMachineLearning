@@ -1,0 +1,29 @@
+---
+title: "Human Activity Recognition"
+author: "Michael J. Sabal"
+date: "October 13, 2016"
+output: html_document
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(ggplot2)
+train1 <- read.csv("pml-training.csv")
+test1 <- read.csv("pml-testing.csv")
+```
+
+## Introduction  
+
+Wearable devices are everywhere now.  Most people use them to help keep track of their activity throughout the day, with the goal of living a healthier lifestyle.  While these devices are very good at quantifying how much of an activity is performed, they don't capture how well it was done.  The data provided by Ugulino et al records correct and incorrect barbell lifts of six participants in five different ways.  Using any or all the included measurements, can a model be developed which will accurately predict which class a particular observation belongs to?
+
+## Exploratory Data Analysis and benchmark
+
+The training set contains `{r} nrow(train1)` observations, and the test set contains `{r} nrow(test1)` observations.  A larger test set will have to be set aside to properly evaluate model performance.
+
+## References
+
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#sbia_paper_section#ixzz4N14uaZfQ
