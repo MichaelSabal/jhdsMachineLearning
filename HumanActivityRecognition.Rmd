@@ -6,12 +6,14 @@ output: html_document
 
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+```{r setup, include=TRUE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+set.seed(20161013)
 library(caret)
 library(ggplot2)
+library(randomForest)
 train1 <- read.csv("pml-training.csv")
-test1 <- read.csv("pml-testing.csv")
+test1 <- read.csv("pml-testing.csv",colClasses = "factor")
 ```
 
 ## Introduction  
@@ -20,7 +22,109 @@ Wearable devices are everywhere now.  Most people use them to help keep track of
 
 ## Exploratory Data Analysis and benchmark
 
-The training set contains `{r} nrow(train1)` observations, and the test set contains `{r} nrow(test1)` observations.  A larger test set will have to be set aside to properly evaluate model performance.
+The training set contains `r nrow(train1)` observations, and the test set contains `r nrow(test1)` observations.  A larger test set will have to be set aside to properly evaluate model performance.  Looking at str(train1), which will not be shown here for brevity's sake, shows several columns which need to be removed because of their strong tie to the training data.  The first column is a row number which will heavily bias the model without any predictive benefit.  Similarly, user_name and the next three timestamps should be left out as they are too specific to the training set.  
+
+The kurtosis_yaw_belt and skewness_yaw_belt fields contain #DIV/0 values, but being a factor variable, this should not negatively affect the model when converted to numeric.  Many of the fields are almost completely NA.  To evaluate whether these are important, we should construct separate models that include and exclude these columns.  But first, they need to be identified.  
+
+```{r}
+nasums <- numeric(ncol(train1))
+for (i in 1:ncol(train1)) nasums[i] <- sum(is.na(train1[,i]))
+highna <- which(nasums > 10000)
+```  
+
+Having done this, we now need to prepare the training set for additional EDA and for model building.  First, many of the factor variables, as shown by str(train1), are actually continuous.  These need to be changed to their numeric values. The second order of business will be to set the NAs to -1, as the remaining values are continuous.
+
+```{r fig.height=4, fig.width=4}
+for (i in 1:160) 
+	if (is.factor(train1[,i]) && length(levels(train1[,i]))>25) 
+		train1[,i] <- as.numeric(as.character(train1[,i]))
+for (i in 1:ncol(train1)) 
+	if (is.numeric(train1[,i])) 
+		train1[is.na(train1[,i]),i] <- -1
+inTrain <- createDataPartition(y=train1$classe,p=0.75,list=FALSE)
+train2 <- train1[inTrain,]
+validate <- train1[-inTrain,]
+qplot(train2$classe,fill=I("blue"))
+```  
+
+The distribution of classes is not perfectly even, but it is close enough that a random forest model should have little trouble with the classification if the features are selected correctly.  
+
+## Model training  
+
+In my first attempt to get a model trained, I used the following code:  
+rfmodel1 <- train(classe~.-X-user_name-raw_timestamp_part_1-raw_timestamp_part_2-
+	cvtd_timestamp,data=train2,method="rf",na.action=na.pass).  
+Besides forgetting to include cross-validation, the training continued for over 18 hours without coming to a proper completion.  As a result, I am going to use the randomForest library directly rather than through caret.  This allows me to use the model for feature selection as well as prediction, and better control the number of trees and tries. The do.trace option shows the cross-validation being used by the random forest algorithm internally.  A number of additional parameters can help control the cross-validation function within the model training.  The rfcv function performs isolated cross-validation to identify the importance of each feature without creating a predictive model.
+
+```{r}
+# The randomForest package documentation can be found at
+# https://cran.r-project.org/web/packages/randomForest/randomForest.pdf.
+rfmodel1 <- randomForest(classe~.-X-user_name-raw_timestamp_part_1-raw_timestamp_part_2-
+	cvtd_timestamp,type="classification",data=train2,importance=TRUE,ntree=20,mtry=40,
+	proximity=TRUE,do.trace=20)
+impList <- importance(rfmodel1,type=1)
+impList <- impList[order(impList),]
+vu <- varUsed(rfmodel1)
+predict1 <- predict(rfmodel1,data=train2[,6:159])
+p1acc <- sum(predict1==train2$classe)/nrow(train2)
+impList[impList<0]  
+```  
+
+In the above list, only `r length(impList[impList<0])` features improved accuracy overall, while `r length(impList[impList>0])` features actually decreased the accuracy, some quite significantly.  Overall, this model provides 99.29% accuracy within the training set, as broken down by the following table:  
+```{r echo=FALSE}
+table(predict1,train2$classe)  
+```  
+
+For comparison, let's create a predictive model that only contains the `r length(vu[vu>10])` features the first run used more than a handful of times, but increase the number of trees, tries, and OOB rate.  Though not shown here, I also ran a model using only the features from impList, but found the OOB error rate to be over 90% in most cases.  I tried setting the ntree parameter equal to nrow(train2), but kept getting out of memory errors until I reduced it to about 500.  The mtry parameter has a maximum value of the number of features being used, but defaults to the square root of that number.
+
+```{r}
+rfmodel2 <- randomForest(y=train2$classe,x=train2[,names(train2[,5+which(vu>10)])],
+	type="classification",ntree=500,oob.times=3,mtry=50,do.trace=100)
+predict2 <- predict(rfmodel2,newdata=train2[,6:159])
+table(predict2,train2$classe)
+```  
+
+In this case, the training set accuracy ends up at 100%.  Now we need to apply both models to the validation and testing sets.  
+
+## Validation  
+
+```{r}
+for (i in 1:ncol(test1)) 
+	if (is.factor(test1[1,i]) && is.numeric(train1[1,i])) 
+		test1[,i] <- as.numeric(as.character(test1[,i]))
+for (i in 1:ncol(test1)) 
+	if (is.numeric(test1[,i])) 
+		test1[is.na(test1[,i]),i] <- -1
+# When there are a different number of levels between the training and test factors,
+# randomForest.predict throws an error.  Equalizing the levels beforehand solves this.
+for (i in 1:ncol(test1)-1)
+	if (is.factor(test1[1,i]))
+		levels(test1[,i]) <- levels(train2[,i])
+predict1v <- predict(rfmodel1,newdata=validate[,1:159])
+predict1t <- predict(rfmodel1,newdata=test1[,1:159])
+predict2v <- predict(rfmodel2,newdata=validate[,6:159])
+predict2t <- predict(rfmodel2,newdata=test1[,6:159])
+
+```  
+
+The final results on the validation are,  
+predict1v: `r sprintf('%5.2f%%',100*sum(predict1v==validate$classe)/nrow(validate))`  
+predict2v: `r sprintf('%5.2f%%',100*sum(predict2v==validate$classe)/nrow(validate))`  
+  
+Though the second model with fewer factors performed better against the training data, 
+it scored two records worse on the validation set.  However, two records out of `r nrow(validate)` is close enough to consider them as performing equally well.  In comparing the results of predict1t to predict2t, the predicted classes are the same.  
+
+## Conclusion  
+
+For the test set, the predicted values are,  
+`r predict1t`  
+
+Charted, this results in the following distribution:  
+```{r echo=FALSE}
+table(predict1t)
+```  
+
+On this small test set, especially since the two models agree perfectly, the expectation is that the predictions are perfectly accurate.  If the test set were much larger, presuming that the measured data was consistent with that in the training set, the overall classification accuracy would be consistent with that of the validation set.  Because the training set had many more observations of class A, and the fewest observations of class D, the confidence of a class A prediction will be higher than the confidence of a class D prediction.  Though it is possible to do here, a larger training set could be split into multiple similarly sized training sets, and the models ensembled using either a separate training against the predicted values vs. actual values, or by using the combine function in the randomForest package.  
 
 ## References
 

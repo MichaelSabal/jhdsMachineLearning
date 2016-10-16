@@ -123,15 +123,124 @@ $(document).ready(function () {
 </div>
 
 
-<div id="introduction" class="section level1">
-<h1>Introduction</h1>
+<pre class="r"><code>knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+set.seed(20161013)
+library(caret)
+library(ggplot2)
+library(randomForest)
+train1 &lt;- read.csv(&quot;pml-training.csv&quot;)
+test1 &lt;- read.csv(&quot;pml-testing.csv&quot;,colClasses = &quot;factor&quot;)</code></pre>
+<div id="introduction" class="section level2">
+<h2>Introduction</h2>
 <p>Wearable devices are everywhere now. Most people use them to help keep track of their activity throughout the day, with the goal of living a healthier lifestyle. While these devices are very good at quantifying how much of an activity is performed, they don’t capture how well it was done. The data provided by Ugulino et al records correct and incorrect barbell lifts of six participants in five different ways. Using any or all the included measurements, can a model be developed which will accurately predict which class a particular observation belongs to?</p>
 </div>
-<div id="exploratory-data-analysis-and-benchmark" class="section level1">
-<h1>Exploratory Data Analysis and benchmark</h1>
+<div id="exploratory-data-analysis-and-benchmark" class="section level2">
+<h2>Exploratory Data Analysis and benchmark</h2>
+<p>The training set contains 19622 observations, and the test set contains 20 observations. A larger test set will have to be set aside to properly evaluate model performance. Looking at str(train1), which will not be shown here for brevity’s sake, shows several columns which need to be removed because of their strong tie to the training data. The first column is a row number which will heavily bias the model without any predictive benefit. Similarly, user_name and the next three timestamps should be left out as they are too specific to the training set.</p>
+<p>The kurtosis_yaw_belt and skewness_yaw_belt fields contain #DIV/0 values, but being a factor variable, this should not negatively affect the model when converted to numeric. Many of the fields are almost completely NA. To evaluate whether these are important, we should construct separate models that include and exclude these columns. But first, they need to be identified.</p>
+<pre class="r"><code>nasums &lt;- numeric(ncol(train1))
+for (i in 1:ncol(train1)) nasums[i] &lt;- sum(is.na(train1[,i]))
+highna &lt;- which(nasums &gt; 10000)</code></pre>
+<p>Having done this, we now need to prepare the training set for additional EDA and for model building. First, many of the factor variables, as shown by str(train1), are actually continuous. These need to be changed to their numeric values. The second order of business will be to set the NAs to -1, as the remaining values are continuous.</p>
+<pre class="r"><code>for (i in 1:160) 
+    if (is.factor(train1[,i]) &amp;&amp; length(levels(train1[,i]))&gt;25) 
+        train1[,i] &lt;- as.numeric(as.character(train1[,i]))
+for (i in 1:ncol(train1)) 
+    if (is.numeric(train1[,i])) 
+        train1[is.na(train1[,i]),i] &lt;- -1
+inTrain &lt;- createDataPartition(y=train1$classe,p=0.75,list=FALSE)
+train2 &lt;- train1[inTrain,]
+validate &lt;- train1[-inTrain,]
+qplot(train2$classe,fill=I(&quot;blue&quot;))</code></pre>
+<p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAwAAAAMACAMAAACkX/C8AAAAllBMVEUAAAAAADoAAGYAAP8AOpAAZrYzMzM6AAA6kJA6kNtNTU1NTW5NTY5NbqtNjshmAABmZmZmtv9uTU1uq+SOTU2Ojk2Oq6uOyP+QOgCQkLaQ2/+rbk2r5P+2ZgC2kDq2///Ijk3I///bkDrb/9vb///kq27kyI7k///r6+v/tmb/yI7/25D/5Kv//7b//8j//9v//+T///9PJsCMAAAACXBIWXMAAB2HAAAdhwGP5fFlAAAfr0lEQVR4nO2dbWPbZnJFtdu8NIzjrGW1TldRV1ajplIURfr/f64gwBdwqJGNmYcDUvfcD62hVeZYl3NIAKTts2dChHM292+AkDmDAEQ6CECkgwBEOghApIMARDoIQKSDAEQ6CECkgwBEOghApIMARDoIQKQzlwD/1yjtJkHWIJtFRADIWmSziAgAWYtsFhEBIGuRzSIiAGQtsllEBICsRTaLiACQtchmEREAshbZLCICQNYim0VEAMhaZLOICABZi2wWEQEga5HNIiIAZC2yWUQEgKxFNouIAJC1yGYREQCyFtksIgJA1iKbRUQAyFpks4gIAFmLbBYRASBrkc0iIgBkLbJZRASArEU2i4gAkLXIZhERALIW2SwiAkDWIptFRADIWmSziAgAWYtsFhEBIGuRzSIiAGQtsllEBICsRTaLeDwC/FtpWhSZnwG5nmwWEQHiReZnQK4nm0VEgHiR+RmQ68lmEREgXmR+BuR6sllEBIgXmZ8BuZ5sFhEB4kXmZ0CuJ5tFRIB4kfkZkOvJZhERIF5kfgbkerJZRASIF5mfAbmebBYRAeJF5mdAriebRUSAeJH5GZDryWYRESBeZH4G5HqyWUQEiBeZnwG5nmwWEQHiReZnQK4nm0VEgHiR+RmQ68lmEREgXmR+BuR6sllEBIgXmZ8BuZ5sFhEB4kXmZ0CuJ5tFRIB4kfkZkOvJZhERIF5kfgbkerJZxJwAD+c//d7/4vFisVh8XH3VP0CAFoGcm9ROgKfLxSDAw/limS8dIECTQM5NaifA7Wqzu2f59/2uf3z1AAHaBHJuUjMBls/uvQD3w/97OH/3+bUDBGgTyLlJrQToToD+c7gGuB6e4LsvfHrtAAHaBHJuUisBrhfvh4vgp8sff+2/ctutu3+AAI0COTepkQDLs5tBgMeL1QnObXfC7x/0+W6V/Xm1AoR/bPK2Ehbg8aJ7cjcC3I93fu+gDwKQo0pYgP7sfroA6+y/NNUK0OKlND8Dcj25kQC3/e0dBJgjkHOTWgjwcN5f3U6/BkAAyPOS2whwu9jk3WfuAtUGcm5ScwG664H+Lv/61r93gABtAjk3qYUAq6w+DMc7waWBnJvUXgA+C1QayLlJ7QXonuhHn/n0DxCgSSDnJh1AAP48QGUg5yY1FCCe/d8YAkCuIJtFRIB4kfkZkOvJZhERIF5kfgbkerJZRASIF5mfAbmebBYRAeJF5mdAriebRUSAeJH5GZDryWYRESBeZH4G5HqyWUQEiBeZnwG5nmwWEQHiReZnQK4nm0VEgHiR+RmQ68lmEREgXmR+BuR6sllEBIgXmZ8BuZ5sFhEB4kXmZ0CuJ5tFRIB4kfkZkOvJZhERIF5kfgbkerJZRASIF5mfAbmebBYRAeJF5mdAriebRUSAeJH5GZDryWYRESBeZH4G5HqyWUQEiBeZnwG5nmwWEQHiReZnQK4nm0VEgHiR+RmQ68lmEREgXmR+BuR6sllEBIgXmZ8BuZ5sFhEB4kXmZ0CuJ5tFRIB4kfkZkOvJZhERIF5kfgbkerJZRASIF5mfAbmebBYRAeJF5mdAriebRUSAeJH5GZDryWYRESBeZH4G5HqyWUQEiBeZnwG5nmwWEQHiReZnQK4nm0VEgHiR+RmQ68lmEREgXmR+BuR6sllEBIgXmZ8BuZ5sFhEB4kXmZ0CuJ5tFRIB4kfkZkOvJZhERIF5kfgbkerJZRASIF5mfAbmebBYRAeJF5mdAriebRUSAeJH5GZDryWYRESBeZH4G5HqyWUQEiBeZnwG5nmwWEQHiReZnQK4nm0VEgHiR+RmQ68lmEREgXmR+BuR6sllEBIgXmZ8BuZ5sFhEB4kXmZ0CuJ5tFRIB4kfkZkOvJZhERIF5kfgbkerJZRASIF5mfAbmebBYRAeJF5mdAriebRUSAeJH5GZDryWYRESBeZH4G5HqyWUQEiBeZnwG5nmwWEQHiReZnQK4nm0VEgHiR+RmQ68lmEREgXmR+BuR6sllEBIgXmZ8BuZ5sFhEB4kXmZ0CuJ5tFRIB4kfkZkOvJZhERIF5kfgbkerJZxLkE2E+tAHP/tORIwitA/JkkPwNyPdksIgLEi8zPgFxPNouIAPEi8zMg15PNIiJAvMj8DMj1ZLOICBAvMj8Dcj3ZLCICxIvMz4BcTzaLiADxIvMzINeTzSIiQLzI/AzI9WSziAgQLzI/A3I92SwiAsSLzM+AXE82i4gA8SLzMyDXk80iIkC8yPwMyPVks4gIEC8yPwNyPdksIgLEi8zPgFxPNouIAPEi8zMg15PNIiJAvMj8DMj1ZLOICBAvMj8Dcj3ZLCICxIvMz4BcTzaLiADxIvMzINeTzSIiQLzI/AzI9WSziAgQLzI/A3I92SwiAsSLzM+AXE82i4gA8SLzMyDXk80iIkC8yPwMyPVks4gIEC8yPwNyPdksIgLEi8zPgFxPNouIAPEi8zMg15PNIiJAvMj8DMj1ZLOICBAvMj8Dcj3ZLCICxIvMz4BcTzaLiADxIvMzINeTzSIiQLzI/AzI9WSziAgQLzI/A3I92SwiAsSLzM+AXE82i4gA8SLzMyDXk80iIkC8yPwMyPVks4gIEC8yPwNyPdksIgLEi8zPgFxPNouIAPEi8zMg15PNIiJAvMj8DMj1ZLOICBAvMj8Dcj3ZLCICxIvMz4BcTzaLiADxIvMzINeTzSIiQLzI/AzI9WSziAgQLzI/A3I92SwiAsSLzM+AXE82i4gA8SLzMyDXk80iIkC8yPwMyPVks4gIEC8yPwNyPdksIgLEi8zPgFxPNouIAPEi8zMg15PNIiJAvMj8DMj1ZLOICBAvMj8Dcj3ZLCICxIvMz4BcTzaLiADxIvMzINeTzSIiQLzI/AzI9WSziAgQLzI/A3I92SwiAsSLzM+AXE82i4gA8SLzMyDXk80iIkC8yPwMyPVks4gIEC8yPwNyPdksIgLEi8zPgFxPNouIAPEi8zMg15PNIiJAvMj8DMj1ZLOIcQEezheLxcfVwePFVx0gQItAzk1qI8Dtos+7zxsZFouffn/9AAGaBHJuUhMBusX+1D+9v39e/7/uSx9fPUCANoGcm9REgOthpR/Oly8B98Mz/JcOEKBNIOcmNRFglceL5WavbHi6XL4q+AcI0CaQc5NaCvBw3j3DP13++Gt/dNutu3+AAI0COTepoQDrK4HVCc5td8LvH/T5bpX9WbUCpH5s8naSEeB6seif4Ddrfj/e+b2DPghAjioJAboT++EW/xQB1tl/aaoVoMVLaX4G5HpyOwGW6c+BEKA2kHOTWgrQ3+eccg2AAJDnJTcWYHkbiLtAtYGcm9RCgM2N/f4+6PVwsL717x0gQJtAzk1qIUC32cM5TX9uwzvBpYGcm9REgOEdgG7Bl+c4fBaoNJBzk5oI0K3+kE+jg+Ezn/4BAjQJ5NykNgIMH/RfLzZ/HqAwkHOTGgmQy/5vDAEgV5DNIiJAvMj8DMj1ZLOICBAvMj8Dcj3ZLCICxIvMz4BcTzaLiADxIvMzINeTzSIiQLzI/AzI9WSziAgQLzI/A3I92SwiAsSLzM+AXE82i4gA8SLzMyDXk80iIkC8yPwMyPVks4gIEC8yPwNyPdksIgLEi8zPgFxPNouIAPEi8zMg15PNIiIA6mmRzSIiAAJokc0iIgACaJHNIiIAAmiRzSIiAAJokc0iIgACaJHNIiIAAmiRzSIiAAJokc0iIgACaJHNIiIAAmiRzSIiAAJokc0iIgACaJHNIiIAAmiRzSIiAAJokc0iIgACaJHNIiIAAmiRzSIiAAJokc0iIgACaJHNIiIAAmiRzSIiAAJokc0iIgAC1JLnbtssIgLM/5BMDQJk2jaLiADzPyRTgwCZts0iIsD8D8nUIECmbbOICDD/QzI1CJBp2ywiAsz/kEwNAmTaNouIAPM/JFODAJm2zSIiwPwPydQgQKZts4gIMP9DMjUIkGnbLCICzP+QTA0CZNo2i4gA8z8kU4MAmbbNIiLA/A/J1CBApm2ziAgw/0MyNQiQadssIgLM/5BMDQJk2jaLiADzPyRTgwCZts0iIsD8D8nUIECmbbOICDD/QzI1CJBp2ywiAsz/kEwNAmTaNouIAPM/JFODAJm2zSIiwPwPydQgQKZts4gIoEmOBQGa5ZiKUSTHggDNckzFKJJjQYBmOaZiFMmxIECzHFMxiuRYEKBZjqkYRXIsCNAsx1SMIjkWBGiWYypGkRwLAjTLMRWjSI4FAZrlmIpRJMeCAAdMbTHq5PlyZD8zrwCa5Fh4BWiWYypGkRwLAjTLMRWjSI4FAZrlmIpRJMeCAM1yTMUokmNBgGY5pmIUybEgQLMcUzGK5FgQoFmOqRhFciwI0CzHVIwiORYEaJZjKkaRHAsCNMsxFaNIjgUBmuWYilEkx4IAzXJMxUDWICOAUwxkDTICOMVA1iAjgFMMZA0yAjjFQNYgI4BTDGQNMgI4xUDWICOAUwxkDTICOMVA1iAjgFMMZA0yAjjFQNYgI4BTDGQN8mQB/vz57//aHNycffMbAkA+YXJOgKuz0QECQD498hQB/vz5bC8IAPmkyVME6M549vJtw/1HAMjl5EkC7L8ENL0EQADI5eRJAgwSND3rQQDICIAAkOciTxbgkEEAyNVkBHCKgaxBjghwxW1QyG+FPF2A3VtBCAD5pMnTBdh9MwABIJ80ebIAf/1ydvah4dIjAOSTEqA7A/rhQPuPAJDLyQEB/vZPBID8VsiTBXi+OtgZEAJALidPF+Cu8QeAEADySQnwfNP21g8CQD4lAcwnQrkNCvmkyQjgFANZg4wATjGQNciTBThkEAByNRkBnGIga5ARwCkGsgYZAZxiIGuQJwvARTDkt0RGAKcYyBpkBHCKgaxBnizAjguNPxiKAJCryRkBnv/6pa0BCAC5mpwS4PmOvxoR8mmTcwL88T3XAJBPmpwToPEnoxEAcjU5JcBd478dFwEgV5MnC2Bugzb9A/IIALmanBSg7Z8NQwDI1eScAE3vASEA5HryZAEOGQSAXE1GAKcYyBpkBHCKgaxBDgmw/PtBz1r/A2EIAHkGckSAG/8i+OF8sVi8+zwcPF50Bx+fv3SAAJDnIwcEGP/96OZtgOvFkI8bGRaLn35//QABIJ+UAH98v977zoTdT4PeD6t/vfjx1/5Z/n2/68sv+QcIAPm0BLjabn3nws5J0PVqpa+XC34/PMM/nC/PiPwDBIB8UgJ0F8Db856bnQvhp8vlM//zcsPfb2x4ulx8eu0AASCflAA7fwzM+Tj0UoCNDbfduvsHCAD5zQnQP7U/XqxOcG47G/yDPt+tsj+qthjIeuQXEzwFWud2eY6/WfP78c7vHfRBAMhzkV9M9CJ4yP3qJtDXC7AOp0CQq8mTT4Feuw062n8EgHwS5OkCvPZG2PPy/Ge4xJ1yDYAAkOciBwR47aMQ3fXvaru5CwT5FMgRAfwPw3X7v/l8w/Vwl3996987QADIJyeAl/H+804w5FMgNxXgdvz5Nj4LBPkEyBEB/vy5v/a9s5fA/YecF5sPet4vRp/59A8QAPJpCXC3uvi9s38pxP1iRwD+PADk4ydPF2D5PkB/+XvDX4sC+eTJ0wW42tz9X94M4i/GgnzS5MkC7HwW6Iq/GhHyaZMnC/A1H4dGAMinQkYApxjIGuTJAnSnQB82B3ecAkE+bfJkAbrz/s2zficD/0IM5JMmTxdgeRv0Q/+ru7Oz0asBAkA+QfJ0AZb3QQ/010MjAORqckCAkQH89eiQT5wcEWCtAH83KOSTJ8cEOFAQAHI1GQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBvmoBNhPbTGQ9cgvhlcAyCrko3oFQADI1WQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBbi/A48X7za8Wi8XHLx4gAOT5yO0FuF6sBHg4Xyzz0++vHyAA5LckwPViJUD3LP++3/WPrx4gAOQ3JED/3D4IcD88wz+cv/v82gECQH47Atx223+/EuB6eIJ/ulx8eu0AASC/IQF+/PV5JcDTZffrQYqPrxwgAOQ3JMAyKwEeL1YnOLfdsX/Q57tV9ofVFgNZj/ximgpwP975vYM+CAB5LvKLqRZgHU6BIFeTD38KhACQj5h8eAG+4hoAASDPRT6YANwFgnwK5IMJ8Hw93OVf3/r3DhAA8tsUgHeCIZ8A+XAC8FkgyCdAPpwA3S9Gn/n0DxAA8tsUgD8PAPn4ye0FSAQBIFeTEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIGGQGcYiBrkBHAKQayBhkBnGIga5ARwCkGsgYZAZxiIGuQEcApBrIG+agE2E9tMZD1yC+GVwDIKuSjegVAAMjVZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEFGAKcYyBpkBHCKgaxBRgCnGMgaZARwioGsQUYApxjIGmQEcIqBrEGeR4DHi8Vi8REBIM9OnkWAh/PFMj/9jgCQBQXonv/f9xbY1wAEgFxNnkOA++G5/+H83WcEgKwnwPXw1P90ufiEAJDlBHi6/PHX/he39hwIASBXk2cQ4PFidepzu7wUWOa7Vfa/t7YYyHrkF1MkwP2XBSBkhlQLsM7+S1Ms7SZB1iAjAGRp8jwC3CIA5OMglwow5S5Q9MdpNQmyBrlUgOfr4f7/17wPEP1xWk2CrEGuFWDCO8HRH6fVJMga5FoBJnwWKPrjtJoEWYNcK0D3EvC1nwaN/jitJkHWIBcL8PV/HiD647SaBFmDXC2Ak3Y/TqtJkDXIZhERALIW2SwiAkDWIptFRADIWmSziAgAWYtsFhEBIGuRzSIiAGQtsllEBICsRTaLiACQtchmEREAshbZLCICQNYim0VEAMhaZLOICABZi2wWEQEga5HNIiIAZC2yWUQEgKxFNouIAJC1yGYREQCyFtksIgJA1iKbRUQAyFpks4hzCdAq8/0905DfBBkBIEuTEQCyNBkBIEuTEQCyNBkBIEuTEQCyNBkBIEuTT10AQlJBACIdBCDSQQAiHQQg0kEAIh0EINI5bQGeLl/458cOnofz4V/+W9h/+7Ui/b+5tv+PDpZQl3lfCx613eXTl799ak5bgK6c6lV43nlIDvCIvJrtItaKv+WW/8wI8Equ3/1H+Q4uH5KVddfVrwHLPfw0kGsNeLxY/aTda25x45u2D5OTFuDx4qf/rX9N3j4k3TbULsP15gXvtta9jQDlZAR4JfeLj6NHpizbh+S69nn44XzzwxZf/YxqrrYeAdw8Xf74a/UOLjPbK8AMP+sq4+eZ29oXXQRw01dzX38ZPLoGKGWXn3FtMxbgwBtpgwBubpdPiI8X3ctAbbb3JWpPv2b4UbfosQClP/boLtAhTDhhAZ4u+wfiuvwyeK7boAiAAOPcD5t/X/5+1OZFuXtsKg3or3nmyawCcAr0cq7ne2tm/ZDUXoAcyTVA8VUXAjgZvTlZfBm8fUiKb8KO77/UvvBxF+j4cr9+HB7Oi88MZhNgfPJRe+kz+kG7Jx7eBziCbE+IuzOD2svguU6Bxvdd7xel1u+8E1z7MyPAyxn1Un0ZvEHfz/GZtOXT7/ITOfN8Fqj7Hcz2enuQnKwAt9sNqH9RnuvqQ/3ToAeo+1QF2Dn7Ln5HdvuQzHBTZoCriPeMAIQcMghApIMARDoIQKSDAEQ6CECkgwBEOghApIMARDoIQKSDAEQ6CECkgwCnlKtvfpv7t/DWggBz5+rM2eo/fz7r8vd/ecdfN4W8HgQ4cO6+tJje6l6drfKtOf5hyhTyhSDAYfPlxXS+4+bsbGfju+Nvfrv65n9+OTv7EOKQF4MAh010Mf/4fnjq/+uX4aynO//5tr8G6L7w0kQECAYBDpvoYt6sT3X+Gp7y7/r/u7wIvjv72z/bceSDAIdNdDGvNle7d70Kw9r7d4EQIBgEOGRu1ifx3fP4h+VZTX/+PtzOWV/MDqvbfe2H4dvtNW73n30YvwJssnxt2LwabATYHT580/Y1wxyujpXdQYBDZizAP9Y3MTe3c4bn+I0A//7z+MubDM/93f/efX0swPoqebhJtBbADL979XB7pf3t4bs40iDAYbNazOUzbbfHf/3X5ux++Uz97fY7+ifuD8M37rwGdF/ov225qz+MBLgZnrivVt++4pjh3avH+ssvHK5nLIfIGoAAh81IgA/9F4bbOcMvVtu3FqD/BnuX52Z9wjI8t6/PXtb/dfft/bP5ZsrO8Jv1U/1wSWEOOx++NRC9IMBhc7W7p8/bmzh7q7va+6udc6C77W3/1dn98Iy/+fpq3jDFDjeLvXe4Jq1fZgSDAIfNVoC9K82rF5+7R2v5vLP/w3+yPmG/MZcK9i7QMPxu9wp393C89bo3kRDgsNkKsPsU299+2RVgdeo/Xm17atJdA9wN1wr7Cz86Hg/fuSe0c7h+RXnx0lsmCHDYvCDA3e7SvSLAlV3L5UXwcObuCWCG9+8oj64dxocIsAwCHDZ7Agx33pfP4vYUyAqwvSzYTuu+MJxNvSzA3vAR8YM93J51KQcBDps9AW5G74C9KsDOfq6uIa6GO5+9AKsFX02+Wt31McPXudl9t6s/dD5VJBYEOGysANutG97acgUwz89Xm49CDP/D5up4eKN4mGKHj068lkKYw9XM3d+VXBDgsPEFuHn1GsBeNa/O/LtvvelXf3N+NH4d2Rt+M7ot2v+nO4fr98X2bjYpBQEOm9XO7ZwCLX/VX4GO7uBbAW7GF6g/9N/W/3mA39bv2t6d7Zz0bE6Bdoav315bvQ9nDpff3v8WboQ/DoQAh83dcON+K8Dm3ss3/322PXmxAqyvZrcCbL+yfZIffYxn9IGK8fD1XZ+VJuZwq5ns/iPAoTO8+bT7ptNw13F1lv+iANtN3W7rsN3mk5z206Bm+HrHN3BzaD8dqhcEOKXwt0I0DwKcUhCgeRDglIIAzYMARDoIQKSDAEQ6CECkgwBEOghApIMARDoIQKSDAEQ6CECkgwBEOghApIMARDoIQKSDAEQ6CECkgwBEOv8P3tyqOTIixf4AAAAASUVORK5CYII=" width="384" /></p>
+<p>The distribution of classes is not perfectly even, but it is close enough that a random forest model should have little trouble with the classification if the features are selected correctly.</p>
 </div>
-<div id="references" class="section level1">
-<h1>References</h1>
+<div id="model-training" class="section level2">
+<h2>Model training</h2>
+<p>In my first attempt to get a model trained, I used the following code:<br />
+rfmodel1 &lt;- train(classe~.-X-user_name-raw_timestamp_part_1-raw_timestamp_part_2- cvtd_timestamp,data=train2,method=“rf”,na.action=na.pass).<br />
+Besides forgetting to include cross-validation, the training continued for over 18 hours without coming to a proper completion. As a result, I am going to use the randomForest library directly rather than through caret. This allows me to use the model for feature selection as well as prediction, and better control the number of trees and tries. The do.trace option shows the cross-validation being used by the random forest algorithm internally. A number of additional parameters can help control the cross-validation function within the model training. The rfcv function performs isolated cross-validation to identify the importance of each feature without creating a predictive model.</p>
+<pre class="r"><code># The randomForest package documentation can be found at
+# https://cran.r-project.org/web/packages/randomForest/randomForest.pdf.
+rfmodel1 &lt;- randomForest(classe~.-X-user_name-raw_timestamp_part_1-raw_timestamp_part_2-
+    cvtd_timestamp,type=&quot;classification&quot;,data=train2,importance=TRUE,ntree=20,mtry=40,
+    proximity=TRUE,do.trace=20)</code></pre>
+<pre><code>## ntree      OOB      1      2      3      4      5
+##    20:   0.71%  0.19%  1.05%  0.97%  1.08%  0.59%</code></pre>
+<pre class="r"><code>impList &lt;- importance(rfmodel1,type=1)
+impList &lt;- impList[order(impList),]
+vu &lt;- varUsed(rfmodel1)
+predict1 &lt;- predict(rfmodel1,data=train2[,6:159])
+p1acc &lt;- sum(predict1==train2$classe)/nrow(train2)
+impList[impList&lt;0]  </code></pre>
+<pre><code>##            min_yaw_belt    amplitude_pitch_belt skewness_pitch_dumbbell 
+##            -1.025978352            -1.025978352            -1.025978352 
+##   skewness_roll_forearm         avg_yaw_forearm      stddev_yaw_forearm 
+##            -1.025978352            -1.025978352            -1.025978352 
+##  kurtosis_roll_dumbbell       var_accel_forearm            avg_yaw_belt 
+##            -1.025978352            -1.025978352            -0.006116451</code></pre>
+<p>In the above list, only 9 features improved accuracy overall, while 69 features actually decreased the accuracy, some quite significantly. Overall, this model provides 99.29% accuracy within the training set, as broken down by the following table:</p>
+<pre><code>##         
+## predict1    A    B    C    D    E
+##        A 4177   13    1    2    0
+##        B    5 2818   13    1    5
+##        C    2   11 2541   22    3
+##        D    1    4   10 2386    8
+##        E    0    2    1    1 2690</code></pre>
+<p>For comparison, let’s create a predictive model that only contains the 53 features the first run used more than a handful of times, but increase the number of trees, tries, and OOB rate. Though not shown here, I also ran a model using only the features from impList, but found the OOB error rate to be over 90% in most cases. I tried setting the ntree parameter equal to nrow(train2), but kept getting out of memory errors until I reduced it to about 500. The mtry parameter has a maximum value of the number of features being used, but defaults to the square root of that number.</p>
+<pre class="r"><code>rfmodel2 &lt;- randomForest(y=train2$classe,x=train2[,names(train2[,5+which(vu&gt;10)])],
+    type=&quot;classification&quot;,ntree=500,oob.times=3,mtry=50,do.trace=100)</code></pre>
+<pre><code>## ntree      OOB      1      2      3      4      5
+##   100:   0.39%  0.05%  0.74%  0.58%  0.41%  0.33%
+##   200:   0.39%  0.05%  0.81%  0.43%  0.50%  0.33%
+##   300:   0.39%  0.05%  0.77%  0.55%  0.54%  0.26%
+##   400:   0.39%  0.05%  0.81%  0.47%  0.50%  0.33%
+##   500:   0.37%  0.05%  0.81%  0.43%  0.50%  0.26%</code></pre>
+<pre class="r"><code>predict2 &lt;- predict(rfmodel2,newdata=train2[,6:159])
+table(predict2,train2$classe)</code></pre>
+<pre><code>##         
+## predict2    A    B    C    D    E
+##        A 4185    0    0    0    0
+##        B    0 2848    0    0    0
+##        C    0    0 2567    0    0
+##        D    0    0    0 2412    0
+##        E    0    0    0    0 2706</code></pre>
+<p>In this case, the training set accuracy ends up at 100%. Now we need to apply both models to the validation and testing sets.</p>
+</div>
+<div id="validation" class="section level2">
+<h2>Validation</h2>
+<pre class="r"><code>for (i in 1:ncol(test1)) 
+    if (is.factor(test1[1,i]) &amp;&amp; is.numeric(train1[1,i])) 
+        test1[,i] &lt;- as.numeric(as.character(test1[,i]))
+for (i in 1:ncol(test1)) 
+    if (is.numeric(test1[,i])) 
+        test1[is.na(test1[,i]),i] &lt;- -1
+# When there are a different number of levels between the training and test factors,
+# randomForest.predict throws an error.  Equalizing the levels beforehand solves this.
+for (i in 1:ncol(test1)-1)
+    if (is.factor(test1[1,i]))
+        levels(test1[,i]) &lt;- levels(train2[,i])
+predict1v &lt;- predict(rfmodel1,newdata=validate[,1:159])
+predict1t &lt;- predict(rfmodel1,newdata=test1[,1:159])
+predict2v &lt;- predict(rfmodel2,newdata=validate[,6:159])
+predict2t &lt;- predict(rfmodel2,newdata=test1[,6:159])</code></pre>
+<p>The final results on the validation are,<br />
+predict1v: 99.49%<br />
+predict2v: 99.45%</p>
+<p>Though the second model with fewer factors performed better against the training data, it scored two records worse on the validation set. However, two records out of 4904 is close enough to consider them as performing equally well. In comparing the results of predict1t to predict2t, the predicted classes are the same.</p>
+</div>
+<div id="conclusion" class="section level2">
+<h2>Conclusion</h2>
+<p>For the test set, the predicted values are,<br />
+B, A, B, A, A, E, D, B, A, A, B, C, B, A, E, E, A, B, B, B</p>
+<p>Charted, this results in the following distribution:</p>
+<pre><code>## predict1t
+## A B C D E 
+## 7 8 1 1 3</code></pre>
+<p>On this small test set, especially since the two models agree perfectly, the expectation is that the predictions are perfectly accurate. If the test set were much larger, presuming that the measured data was consistent with that in the training set, the overall classification accuracy would be consistent with that of the validation set. Because the training set had many more observations of class A, and the fewest observations of class D, the confidence of a class A prediction will be higher than the confidence of a class D prediction. Though it is possible to do here, a larger training set could be split into multiple similarly sized training sets, and the models ensembled using either a separate training against the predicted values vs. actual values, or by using the combine function in the randomForest package.</p>
+</div>
+<div id="references" class="section level2">
+<h2>References</h2>
 <p>Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers’ Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6.</p>
 <p>Read more: <a href="http://groupware.les.inf.puc-rio.br/har#sbia_paper_section#ixzz4N14uaZfQ" class="uri">http://groupware.les.inf.puc-rio.br/har#sbia_paper_section#ixzz4N14uaZfQ</a></p>
 </div>
